@@ -377,29 +377,48 @@ static speed_t termios_baud(int baud) {
 
 static void change_baud(int fd, int baud, bool verbose) {
   struct termios tio;
+  speed_t speed = termios_baud(baud);
+  if (speed == B0) fail("Unsupported baud rate: %d\n", baud);
   if (tcgetattr(fd, &tio) != 0)
     fail("Can't set fd %d to baud %d: %d\n", fd, baud, errno);
-  cfsetospeed(&tio, termios_baud(baud));
-  cfsetispeed(&tio, termios_baud(baud));
-  tcsetattr(fd, TCSANOW, &tio);
+  tio.c_cflag |= CLOCAL | CREAD;
+  tio.c_cc[VMIN] = 1;
+  tio.c_cc[VTIME] = 0;
+  if (cfsetospeed(&tio, speed) != 0 || cfsetispeed(&tio, speed) != 0)
+    fail("Can't set baud %d on fd %d: %d\n", baud, fd, errno);
+  if (tcsetattr(fd, TCSANOW, &tio) != 0)
+    fail("Can't apply baud %d on fd %d: %d\n", baud, fd, errno);
   if (verbose) printf("fd %d set to baud %d\n", fd, baud);
 }
 
 static int open_serial(const char *name, int baud, bool verbose) {
   struct termios tio;
+  speed_t speed = termios_baud(baud);
   int fd = open(name, O_RDWR | O_NOCTTY | O_SYNC);
+  if (speed == B0) fail("Unsupported baud rate: %d\n", baud);
   if (fd < 0) {
     fail("open(%s): %d (%s)\n", name, fd, strerror(errno));
-  } else if (tcgetattr(fd, &tio) == 0) {
-    tio.c_iflag = 0;                     // input mode
-    tio.c_oflag = 0;                     // output mode
-    tio.c_lflag = 0;                     // local flags
-    tio.c_cflag = CLOCAL | CREAD | CS8;  // control flags
+  } else if (tcgetattr(fd, &tio) != 0) {
+    fail("tcgetattr(%s): %d (%s)\n", name, errno, strerror(errno));
+  } else {
+    // Configure serial in raw 8N1 mode and always enable receiver.
+    tio.c_iflag = 0;                    // input mode
+    tio.c_oflag = 0;                    // output mode
+    tio.c_lflag = 0;                    // local flags
+    tio.c_cflag &= ~(CSIZE | PARENB | PARODD | CSTOPB);
+    tio.c_cflag |= CLOCAL | CREAD | CS8;  // control flags
+#ifdef CRTSCTS
+    tio.c_cflag &= ~CRTSCTS;  // Disable hardware flow control
+#endif
+    tio.c_cc[VMIN] = 1;
+    tio.c_cc[VTIME] = 0;
     // Order is important: setting speed must go after setting flags,
-    // becase (depending on implementation) speed flags could reside in flags
-    cfsetospeed(&tio, termios_baud(baud));
-    cfsetispeed(&tio, termios_baud(baud));
-    tcsetattr(fd, TCSANOW, &tio);
+    // because (depending on implementation) speed flags could reside in flags.
+    if (cfsetospeed(&tio, speed) != 0 || cfsetispeed(&tio, speed) != 0)
+      fail("Can't set baud %d on %s: %d (%s)\n", baud, name, errno,
+           strerror(errno));
+    if (tcsetattr(fd, TCSANOW, &tio) != 0)
+      fail("tcsetattr(%s): %d (%s)\n", name, errno, strerror(errno));
   }
   if (verbose) printf("Opened %s @ %d fd=%d\n", name, baud, fd);
   return fd;
