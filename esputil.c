@@ -90,6 +90,7 @@ struct ctx {
   const char *fpar;        // Flash params, e.g. "0x220"
   const char *fspi;        // Flash SPI pins: CLK,Q,D,HD,CS. E.g. "6,17,8,11,16"
   bool verbose;            // Hexdump serial comms
+  bool noreset;            // Skip DTR/RTS reset (for boards already in bootloader)
   int fd;                  // Serial port file descriptor
   int sock;                // UDP socket for exchanging SLIP frames when monitor
   struct sockaddr_in sin;  // UDP sockaddr of the remote peer
@@ -208,17 +209,21 @@ static void uart_tx(unsigned char ch, void *arg) {
 static void usage(struct ctx *ctx) {
   printf("Defaults: BAUD=%s, PORT=%s\n", ctx->baud, ctx->port);
   printf("Usage:\n");
-  printf("  esputil [-v] [-b BAUD] [-p PORT] info\n");
-  printf("  esputil [-v] [-b BAUD] [-p PORT] [-udp PORT] monitor\n");
-  printf("  esputil [-v] [-b BAUD] [-p PORT] readmem ADDR SIZE\n");
-  printf("  esputil [-v] [-b BAUD] [-p PORT] readflash ADDR SIZE\n");
-  printf("  esputil [-v] [-b BAUD] [-p PORT] [-fp FLASH_PARAMS] ");
+  printf("  esputil [-v] [-noreset] [-b BAUD] [-p PORT] info\n");
+  printf("  esputil [-v] [-noreset] [-b BAUD] [-p PORT] [-udp PORT] monitor\n");
+  printf("  esputil [-v] [-noreset] [-b BAUD] [-p PORT] readmem ADDR SIZE\n");
+  printf("  esputil [-v] [-noreset] [-b BAUD] [-p PORT] readflash ADDR SIZE\n");
+  printf("  esputil [-v] [-noreset] [-b BAUD] [-p PORT] [-fp FLASH_PARAMS] ");
   printf("[-fspi FLASH_SPI] flash ADDrESS1 FILE1.bin ...\n");
-  printf("  esputil [-v] [-b BAUD] [-p PORT] [-fp FLASH_PARAMS] ");
+  printf("  esputil [-v] [-noreset] [-b BAUD] [-p PORT] [-fp FLASH_PARAMS] ");
   printf("[-fspi FLASH_SPI] flash FILE.HEX\n");
   printf("  esputil [-v] [-chip detect] mkbin FIRMWARE.ELF FIRMWARE.BIN\n");
   printf("  esputil mkhex ADDRESS1 BINFILE1 ADDRESS2 BINFILE2 ...\n");
   printf("  esputil [-tmp TMP_DIR] unhex HEXFILE\n");
+  printf("Options:\n");
+  printf("  -noreset  Skip DTR/RTS reset sequence. Use when the chip is\n");
+  printf("            already in bootloader mode (e.g. manually reset via GPIO,\n");
+  printf("            or using a native UART like /dev/ttyS1 on MT7621).\n");
   exit(EXIT_FAILURE);
 }
 
@@ -538,9 +543,25 @@ static void chip_detect(struct ctx *ctx) {
 }
 
 // Assume chip is rebooted and is in download mode.
-// Send SYNC commands until success, and detect chip ID
+// Send SYNC commands until success, and detect chip ID.
+// If ctx->noreset is set, skip DTR/RTS reset and go straight to SYNC.
 static bool chip_connect(struct ctx *ctx) {
   int i, j;
+  if (ctx->noreset) {
+    // Chip is already in bootloader mode; just send SYNC commands.
+    flushio(ctx->fd);
+    for (i = 0; i < 10; i++) {
+      uint8_t data[36] = {7, 7, 0x12, 0x20};     // SYNC command
+      memset(data + 4, 0x55, sizeof(data) - 4);  // Fill with 0x55
+      if (cmd(ctx, 8, data, sizeof(data), 0, 200) == 0) {
+        sleep_ms(50);
+        flushio(ctx->fd);  // Discard all data
+        chip_detect(ctx);
+        return true;
+      }
+    }
+    return false;
+  }
   for (j = 0; j < 6; j++) {
     // Alternate different reset methods
     if (j & 1) {
@@ -1156,6 +1177,8 @@ int main(int argc, const char **argv) {
       udp_port = argv[++i];
     } else if (strcmp(argv[i], "-v") == 0) {
       ctx.verbose = true;
+    } else if (strcmp(argv[i], "-noreset") == 0) {
+      ctx.noreset = true;
     } else if (argv[i][0] == '-') {
       usage(&ctx);
     } else {
