@@ -435,7 +435,7 @@ static int iowait(int fd, int sock, int ms) {
   struct timeval tv = {.tv_sec = ms / 1000, .tv_usec = (ms % 1000) * 1000};
   fd_set rset;
   FD_ZERO(&rset);
-  FD_SET(0, &rset);   // Listen to stdin too
+  if (isatty(0)) FD_SET(0, &rset);  // Listen to stdin only when it's a TTY
   FD_SET(fd, &rset);  // Listen to the UART fd
   if (sock > 0) FD_SET(sock, &rset);
   if (select((fd > sock ? fd : sock) + 1, &rset, 0, 0, &tv) < 0) FD_ZERO(&rset);
