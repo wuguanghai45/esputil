@@ -529,7 +529,7 @@ static void chip_detect(struct ctx *ctx) {
   uint32_t chipid;
   if (read32(ctx, 0x40001000, &chipid)) fail("Error reading chip ID\n");
   nchips = sizeof(s_known_chips) / sizeof(s_known_chips[0]);
-  for (i = 0; i < nchips; i++) {
+  for (i = 1; i < nchips; i++) {
     if (s_known_chips[i].id == chipid) {
       if (ctx->chip.id && ctx->chip.id != chipid) {
         fail("Chip specified (%s) does not match chip detected (%s)\n",
@@ -836,8 +836,9 @@ static void flashbin(struct ctx *ctx, uint16_t flash_params,
   fflush(stdout);
 
   {
-    uint32_t num_blocks = (size + block_size - 1) / block_size;
-    uint32_t d1[] = {size, num_blocks, block_size, flash_offset, encrypted};
+    uint32_t aligned_size = (size + 3) & ~3;
+    uint32_t num_blocks = (aligned_size + block_size - 1) / block_size;
+    uint32_t d1[] = {aligned_size, num_blocks, block_size, flash_offset, encrypted};
     uint16_t d1size = sizeof(d1) - 4;
     // Flash begin. S2, S3, C3 chips have an extra 5th parameter.
     if (ctx->chip.id == CHIP_ID_ESP32_S2 ||
@@ -875,8 +876,8 @@ static void flashbin(struct ctx *ctx, uint16_t flash_params,
     }
 
     // Align buffer to block_size and pad with 0xff
-    // memset(buf + hs + n, 255, sizeof(buf) - hs - n);
-    // n = ALIGN(n, block_size);
+    memset(buf + hs + n, 255, sizeof(buf) - hs - n);
+    n = (n + 3) & ~3;
 
     // Flash write
     tmp = n, memcpy(&buf[0], &tmp, 4);      // Set buffer size
